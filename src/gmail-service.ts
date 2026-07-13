@@ -14,6 +14,13 @@ export interface EmailSummary {
   labelIds: string[];
 }
 
+export interface AttachmentMeta {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface EmailDetail {
   id: string;
   threadId: string;
@@ -26,6 +33,14 @@ export interface EmailDetail {
   labelIds: string[];
   headers: Record<string, string>;
   unsubscribeLinks: string[];
+  attachments: AttachmentMeta[];
+}
+
+export interface AttachmentData {
+  filename: string;
+  mimeType: string;
+  size: number;
+  data: string; // base64-encoded (standard base64, ready to decode)
 }
 
 export interface UnsubscribeResult {
@@ -119,6 +134,7 @@ export class GmailService {
 
     const body = this.extractBody(res.data.payload ?? {});
     const unsubscribeLinks = this.parseUnsubscribeLinks(headersMap, body);
+    const attachments = this.collectAttachments(res.data.payload ?? {});
 
     return {
       id: res.data.id!,
@@ -132,7 +148,81 @@ export class GmailService {
       labelIds: res.data.labelIds ?? [],
       headers: headersMap,
       unsubscribeLinks,
+      attachments,
     };
+  }
+
+  // -----------------------------------------------------------------------
+  // list_attachments — return metadata for every attachment on a message
+  // -----------------------------------------------------------------------
+
+  async listAttachments(messageId: string): Promise<AttachmentMeta[]> {
+    const res = await this.gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    });
+    return this.collectAttachments(res.data.payload ?? {});
+  }
+
+  // -----------------------------------------------------------------------
+  // get_attachment — download one attachment's content as base64
+  // -----------------------------------------------------------------------
+
+  async getAttachment(
+    messageId: string,
+    attachmentId: string
+  ): Promise<AttachmentData> {
+    // Look up metadata (filename, mimeType) from the message structure
+    const msg = await this.gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    });
+    const all = this.collectAttachments(msg.data.payload ?? {});
+    const meta = all.find((a) => a.attachmentId === attachmentId);
+
+    const res = await this.gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId,
+      id: attachmentId,
+    });
+
+    // Gmail returns base64url — convert to standard base64 for easy decoding
+    const raw = res.data.data ?? "";
+    const standardB64 = Buffer.from(raw, "base64url").toString("base64");
+
+    return {
+      filename: meta?.filename ?? "attachment",
+      mimeType: meta?.mimeType ?? "application/octet-stream",
+      size: res.data.size ?? meta?.size ?? 0,
+      data: standardB64,
+    };
+  }
+
+  // Walk the MIME tree and collect every part that is an attachment
+  private collectAttachments(
+    payload: gmail_v1.Schema$MessagePart
+  ): AttachmentMeta[] {
+    const out: AttachmentMeta[] = [];
+
+    const walk = (part: gmail_v1.Schema$MessagePart) => {
+      // A part is an attachment when it has a filename and an attachmentId
+      if (part.filename && part.body?.attachmentId) {
+        out.push({
+          attachmentId: part.body.attachmentId,
+          filename: part.filename,
+          mimeType: part.mimeType ?? "application/octet-stream",
+          size: part.body.size ?? 0,
+        });
+      }
+      if (part.parts) {
+        for (const child of part.parts) walk(child);
+      }
+    };
+
+    walk(payload);
+    return out;
   }
 
   // -----------------------------------------------------------------------

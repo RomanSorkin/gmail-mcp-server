@@ -188,6 +188,80 @@ function createMcpServer(): McpServer {
     }
   );
 
+  // ---- list_attachments ----
+  server.tool(
+    "list_attachments",
+    "List all attachments on a specific email, returning each attachment's id, filename, MIME type, and size. Use the attachment_id with get_attachment to download the file.",
+    {
+      account: z
+        .string()
+        .describe("Email address of the account this message belongs to"),
+      message_id: z.string().describe("The Gmail message ID"),
+    },
+    async ({ account, message_id }) => {
+      const gmail = await getGmailServiceForAccount(account);
+      const attachments = await gmail.listAttachments(message_id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                account,
+                message_id,
+                count: attachments.length,
+                attachments,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // ---- get_attachment ----
+  server.tool(
+    "get_attachment",
+    "Download a single attachment from an email. Returns the file as base64-encoded content along with its filename and MIME type. Get the attachment_id from get_email or list_attachments first.",
+    {
+      account: z
+        .string()
+        .describe("Email address of the account this message belongs to"),
+      message_id: z.string().describe("The Gmail message ID"),
+      attachment_id: z
+        .string()
+        .describe(
+          "The attachment ID (from get_email's attachments array or list_attachments)"
+        ),
+    },
+    async ({ account, message_id, attachment_id }) => {
+      const gmail = await getGmailServiceForAccount(account);
+      const file = await gmail.getAttachment(message_id, attachment_id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                account,
+                message_id,
+                filename: file.filename,
+                mimeType: file.mimeType,
+                size: file.size,
+                encoding: "base64",
+                data: file.data,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
   // ---- archive_email ----
   server.tool(
     "archive_email",
